@@ -1,0 +1,137 @@
+(load listfunctions)
+(load prng)
+
+\ AUXILIARY HELPER FUNCTIONS 
+
+\ Repeat specifies how many random results you want. 
+\ This is done by passing on a closure containing the random expression so that the evaluation is delayed until needed  
+\ Example: repeat: n=5 1d1 = ((1) (1) (1) (1) (1)) =  (repeat (lambda () (mdn 1 1)) 5)
+(define repeat (lambda 
+                    (e 0) ()
+                    (e n) (cons (e) (repeat e (- n 1)))
+))
+
+\ Higher Order Function (HoF) used to accumulate result while traversing die roll result collections  
+(define foldl (lambda 
+                (f acc ()) acc 
+                (f acc (x . xs)) (foldl f (f acc x) xs)
+))
+
+\ Helper function uses simple linear congruential random number generator to simulate random die rolls 
+(define dieRoll (lambda (n) (list(+ (rnd n) 1))))
+
+\ Remove helper function for least and largest 
+(define remove (lambda
+                    (n ()) ()
+                    (n list) (if (= n (car list)) (cdr list) (cons (car list) (remove n (cdr list))) )
+))
+
+\ TROLL DSL 
+
+\ Arithmetic functions 
+(define plus (lambda (e1 e2) (list (+ (if (number? e1) e1 (car e1)) (if (number? e2) e2 (car e2)) ))))
+(define minus (lambda (e1 e2) (list (- (if (number? e1) e1 (car e1)) (if (number? e2) e2 (car e2)) ))))
+
+\ Troll die rolls 
+\ d e = (d e) (e.g. (d n) = random die roll result with n-sided die)
+\ a single die-roll is a single integer value 
+(define d (lambda (e2) (dieRoll e2)))
+
+\ e1 d e2 = (d e1 e2) (e.g. (d m n) = list of m random n-sided die roll results)
+\ m die rolls is a list collection of m single die roll integer values  
+(define mdn (lambda 
+                  (0 e2) () 
+                  (e1 e2) (append (d e2) (mdn (- e1 1) e2)) 
+))
+
+\ e1 # e2 = (# e1 e2) = repeat e=e2 n=e1 times and collect results in single list collection 
+\ Example: 5 # 1d1 = (# 5 (mdn 1 1)) = (1 1 1 1 1) (collected list)
+\ Call example: (# 5 (lambda () (mdn 1 2)))  
+\ Variable example: (define e (# 5 (lambda () (mdn 2 10)))) followed by (repeat (lambda () e) 10)
+(define # (lambda 
+            (0 e) ()
+            (n e) (append (e) (# (- n 1) e))
+))
+
+\ Filters 
+\ e1 < e2 = (filter e1 < e2) 
+\ e1 > e2 = (filter e1 > e2)
+\ Example: 7 < 10d10 = (filter 7 < (mdn 10 10))
+(define filter (lambda
+                (e1 operator ()) ()
+                (e1 operator list) (if (operator e1 (car list)) (cons (car list) (filter e1 operator (cdr list))) (filter e1 operator (cdr list)) )    
+))
+
+\ Simpler filter2 using fold HoF 
+(define filter2 (lambda (e1 operator list) (foldl (lambda (acc x) (if (operator e1 x) (cons x acc) acc) ) () list))) 
+
+\ sum e = (sum e)
+\ Example: (sum (mdn 2 2))
+(define sum (lambda (e) (list (foldl + 0 e))))
+
+\ count e = (count e) 
+\ Example: (count (mdn 2 2))
+(define count (lambda (e) (list (foldl (lambda (acc x) (+ acc 1)) 0 e))))
+
+\ { e1, ..., e_n } = (union e1 (union e2 ... (union en))) 
+\ Examples: 
+\ 4 U 2 = (union 4 2)
+\ 4 U 2d8 = (union 4 (mdn 2 8))
+\ 2 U 3d6 U d2 = (union 2 (union (mdn 3 6) (d 2)))
+\ 3d6 U 3d8 = (union (mdn 3 6) (mdn 3 8))
+(define union (lambda (e1 e2) (append (if (number? e1) (list e1) e1) (if (number? e2) (list e2) e2) )))
+
+\ min e = (min e) = (least 1 e)  
+\ Example: (min (mdn 2 3))
+(define min (lambda 
+                (e) (list (foldl (lambda (acc x) (if (< x acc) x acc)) (car e) (cdr e)) )
+))
+
+\ max e = (max e) = (largest 1 e) 
+\ Example: (max (mdn 2 3))
+(define max (lambda 
+                (e) (list (foldl (lambda (acc x) (if (> x acc) x acc)) (car e) (cdr e)))
+))
+
+\ least e1 e2 = (least e1 e2)  
+\ Example: (least 3 '(3 2 10 2 8)) = (2 2 3)
+(define least (lambda (n e) (lHelper n e min)))
+
+\ largest e1 e2 = (largest e1 e2)  
+\ Example: (largest 3 '(1 2 10 10)) = (2 10 10)
+(define largest (lambda (n e) (reverse (lHelper n e max))))
+
+(define lHelper (lambda 
+                    (0 e opr) () \ n elements taken (assume n >= 0)
+                    (n () opr) () \ no more elements to take 
+                    (n e opr) ((lambda (m) (cons m (lHelper (- n 1) (remove m e) opr) ) ) (car (opr e))) 
+))
+
+\ choose e (pick element in e at uniform random with index 1 to n) 
+\ Example: (choose '(1 2 3))
+(define choose (lambda (e) ((lambda (n) (list (nth n e))) 
+                            (car (dieRoll (car (count e))))) 
+))
+
+\ nth helper function for choose 
+(define nth (lambda 
+                (n list) (if (= n 1) (car list) (nth (- n 1) (cdr list)))
+))
+
+\ x:= e1; e2 = ((lambda (x) e2) e1)
+\ Example: x := 10d8; (min x) + (sum x) = (let (mdn 10 8) (lambda (x) (+ (min x) (sum x))))
+(define let (lambda (e1 e2) ((lambda (x) (e2 x)) e1)))
+
+\ accumulate x:=e1 while e2 = (accumulate (lambda () e1) (lambda (x) (filter n opr e2)))
+\ Examples: 
+\ accumulate x:=d10 while x<10 : (accumulate (lambda () (d 10)) (lambda (x) (filter 10 > x)))
+\ (accumulate (lambda () (d 6)) (lambda (x) (filter 1 < x)) 12) 
+\ (accumulate (lambda () (d 6)) (lambda (x) (filter 1 < x))) \ n = 12 default 
+(define accumulate (lambda (e cond) (accumulateHelper e cond 12) 
+                           (e cond n) (accumulateHelper e cond n)
+))
+
+\ less optinmal solution: checks filter until error result, instead of just returning 12th result (e)
+(define accumulateHelper (lambda (e cond 1) ((lambda (res) (if (cond res) (accumulateHelper e cond 1) res) ) (e))  
+                                 (e cond n) ((lambda (res) (if (cond res) (append res (accumulateHelper e cond (- n 1))) res ) )  (e) )
+))
